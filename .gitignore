@@ -1,5 +1,8 @@
 ios/build/
 ios/*.xcodeproj/
 ios/CellBridge.ipa
-linux/cellbridge
+desktop/cellbridge
+desktop/cb-*
+desktop/CellBridge.app/
+desktop/*.zip
 *.ipa

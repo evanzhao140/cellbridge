@@ -1,0 +1,47 @@
+name: Build macOS app
+on:
+  push:
+    branches: [main]
+    paths: ["desktop/**", ".github/workflows/macos.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Build universal binary
+        working-directory: desktop
+        run: |
+          set -e
+          export CGO_ENABLED=1 GOOS=darwin MACOSX_DEPLOYMENT_TARGET=11.0
+          GOARCH=arm64 CGO_CFLAGS="-arch arm64" CGO_LDFLAGS="-arch arm64" go build -trimpath -ldflags='-s -w' -o cb-arm64 .
+          GOARCH=amd64 CGO_CFLAGS="-arch x86_64" CGO_LDFLAGS="-arch x86_64" go build -trimpath -ldflags='-s -w' -o cb-amd64 .
+          lipo -create -output cellbridge cb-arm64 cb-amd64
+          lipo -info cellbridge
+      - name: Bundle CellBridge.app
+        working-directory: desktop
+        run: |
+          set -e
+          APP=CellBridge.app
+          mkdir -p $APP/Contents/MacOS
+          cp macos/Info.plist $APP/Contents/
+          cp cellbridge $APP/Contents/MacOS/
+          codesign --force --deep -s - $APP
+          ditto -c -k --keepParent $APP CellBridge-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CellBridge-macOS
+          path: desktop/CellBridge-macOS.zip
+      - name: Publish "mac-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mac-latest -y --cleanup-tag || true
+          gh release create mac-latest desktop/CellBridge-macOS.zip --title "CellBridge for macOS (latest build)" \
+            --notes "Unsigned menu-bar app from ${GITHUB_SHA::7}. Unzip, move to /Applications, then run: xattr -dr com.apple.quarantine /Applications/CellBridge.app" --prerelease

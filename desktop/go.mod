@@ -1,4 +1,4 @@
-module github.com/evanzhao140/cellbridge/linux
+module github.com/evanzhao140/cellbridge/desktop
 
 go 1.26.3
 

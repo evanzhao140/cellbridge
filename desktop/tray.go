@@ -13,10 +13,8 @@ import (
 	"math"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -244,7 +242,8 @@ func (c *controller) tunnel(ctx context.Context, iface, addr string) error {
 	c.mWifi.SetTitle(c.wifiTitle())
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	lastRx, lastTx, t0 := readCounter("rx_bytes"), readCounter("tx_bytes"), time.Now()
+	lastDown, lastUp := tunBytes()
+	t0 := time.Now()
 	misses, n := 0, 0
 	for {
 		select {
@@ -254,12 +253,12 @@ func (c *controller) tunnel(ctx context.Context, iface, addr string) error {
 		case err := <-exited:
 			return fmt.Errorf("tunnel stopped: %v %s", err, strings.TrimSpace(stderr.String()))
 		case <-tick.C:
-			rx, tx, now := readCounter("rx_bytes"), readCounter("tx_bytes"), time.Now()
+			d, u := tunBytes()
+			now := time.Now()
 			dt := now.Sub(t0).Seconds()
-			// tun tx = packets delivered to this machine (download).
-			down := float64(tx-lastTx) * 8 / dt / 1e6
-			up := float64(rx-lastRx) * 8 / dt / 1e6
-			lastRx, lastTx, t0 = rx, tx, now
+			down := float64(d-lastDown) * 8 / dt / 1e6
+			up := float64(u-lastUp) * 8 / dt / 1e6
+			lastDown, lastUp, t0 = d, u, now
 			c.mSpeed.SetTitle(fmt.Sprintf("↓ %.1f Mbit/s   ↑ %.1f Mbit/s", down, up))
 			if n++; n%3 == 0 {
 				if isSocks(addr, 2*time.Second) {
@@ -281,40 +280,6 @@ func (c *controller) wifiTitle() string {
 	return fmt.Sprintf("Wi-Fi: %s   password: %s", c.cfg.SSID, c.cfg.Password)
 }
 
-func installAutostart() {
-	self, err := os.Executable()
-	if err != nil {
-		return
-	}
-	dir, _ := os.UserConfigDir()
-	p := filepath.Join(dir, "autostart", "cellbridge.desktop")
-	body := "[Desktop Entry]\nType=Application\nName=CellBridge\n" +
-		"Comment=Use iPhone cellular data over Wi-Fi without Personal Hotspot\n" +
-		"Exec=" + self + "\nIcon=network-wireless\nX-GNOME-Autostart-enabled=true\n"
-	os.MkdirAll(filepath.Dir(p), 0o755)
-	if old, _ := os.ReadFile(p); string(old) != body {
-		os.WriteFile(p, []byte(body), 0o644)
-	}
-}
-
-// installMenuEntry adds CellBridge to the application menu (Whisker → Internet).
-func installMenuEntry() {
-	self, err := os.Executable()
-	if err != nil {
-		return
-	}
-	home, _ := os.UserHomeDir()
-	p := filepath.Join(home, ".local", "share", "applications", "cellbridge.desktop")
-	body := "[Desktop Entry]\nType=Application\nName=CellBridge\nGenericName=iPhone cellular sharing\n" +
-		"Comment=Use iPhone cellular data over Wi-Fi without Personal Hotspot\n" +
-		"Exec=" + self + " --connect\nIcon=network-wireless\nTerminal=false\nCategories=Network;\n" +
-		"Keywords=iphone;hotspot;tether;cellular;\n"
-	os.MkdirAll(filepath.Dir(p), 0o755)
-	if old, _ := os.ReadFile(p); string(old) != body {
-		os.WriteFile(p, []byte(body), 0o644)
-	}
-}
-
 func runTray() {
 	if dir, err := os.UserCacheDir(); err == nil {
 		os.MkdirAll(dir, 0o755)
@@ -325,7 +290,7 @@ func runTray() {
 	// One tray per session: launching from the menu again is a no-op.
 	lock, err := os.OpenFile(filepath.Join(os.TempDir(), fmt.Sprintf("cellbridge-%d.lock", os.Getuid())), os.O_CREATE|os.O_RDWR, 0o600)
 	if err == nil && syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
-		exec.Command("notify-send", "-i", "network-wireless", "CellBridge", "Already running – use the tray icon.").Run()
+		notify("Already running – use the tray icon.")
 		return
 	}
 	c := &controller{cfg: loadConfig()}
@@ -353,12 +318,14 @@ func (c *controller) ready() {
 	c.mWifi.Disable()
 	systray.AddSeparator()
 	c.mHotspot = systray.AddMenuItemCheckbox("Create Wi-Fi hotspot on this laptop", "Uncheck if the phone and laptop already share a Wi-Fi network", c.cfg.Hotspot)
+	if !canHotspot {
+		c.mHotspot.Hide()
+	}
 	c.mAuto = systray.AddMenuItemCheckbox("Connect automatically on startup", "", c.cfg.AutoConnect)
 	mLog := systray.AddMenuItem("Open log", "")
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	// The menu entry passes --connect; login autostart doesn't.
-	if c.cfg.AutoConnect || slices.Contains(os.Args[1:], "--connect") {
+	if c.cfg.AutoConnect || wantsConnect() {
 		c.start()
 	}
 	go func() {
@@ -389,7 +356,7 @@ func (c *controller) ready() {
 				c.cfg.save()
 			case <-mLog.ClickedCh:
 				dir, _ := os.UserCacheDir()
-				exec.Command("xdg-open", filepath.Join(dir, "cellbridge.log")).Start()
+				openFile(filepath.Join(dir, "cellbridge.log"))
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
