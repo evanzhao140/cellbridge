@@ -1,0 +1,5 @@
+ios/build/
+ios/*.xcodeproj/
+ios/CellBridge.ipa
+linux/cellbridge
+*.ipa

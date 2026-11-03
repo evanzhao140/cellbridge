@@ -1,0 +1,34 @@
+name: CellBridge
+options:
+  bundleIdPrefix: com.evanzhao140
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+targets:
+  CellBridge:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    scheme: {}
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: CellBridge
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSLocalNetworkUsageDescription: CellBridge accepts connections from your laptop over Wi-Fi and relays them over cellular.
+        NSBonjourServices: [_cellbridge._tcp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.evanzhao140.cellbridge
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "NO"
