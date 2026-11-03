@@ -50,7 +50,7 @@ func loadConfig() *Config {
 		c.SSID = "ozok internet"
 	}
 	if c.Password == "" {
-		c.Password = randString("0123456789", 8) // easy to type on a phone
+		c.Password = randString("abcdefghjkmnpqrstuvwxyz23456789", 12)
 	}
 	c.save()
 	return c
@@ -126,10 +126,12 @@ func hotspotUp(iface string, c *Config) error {
 	privileged("dnsmasq", "on").Run()
 	defer privileged("dnsmasq", "off").Run()
 
-	// Try the band that worked last time first; many cards refuse a 5 GHz AP.
-	bands := []string{"a", "bg"}
-	if c.Band == "bg" {
-		bands = []string{"bg", "a"}
+	// 2.4 GHz only by default: this card (and many others) refuses a 5 GHz AP,
+	// and each refusal costs ~25 s waiting for NetworkManager's timeout.
+	// Set "band": "a" in the config to try 5 GHz first.
+	bands := []string{"bg"}
+	if c.Band == "a" {
+		bands = []string{"a", "bg"}
 	}
 	var lastErr error
 	for _, band := range bands {
