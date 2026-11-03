@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -296,6 +297,24 @@ func installAutostart() {
 	}
 }
 
+// installMenuEntry adds CellBridge to the application menu (Whisker → Internet).
+func installMenuEntry() {
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, ".local", "share", "applications", "cellbridge.desktop")
+	body := "[Desktop Entry]\nType=Application\nName=CellBridge\nGenericName=iPhone cellular sharing\n" +
+		"Comment=Use iPhone cellular data over Wi-Fi without Personal Hotspot\n" +
+		"Exec=" + self + " --connect\nIcon=network-wireless\nTerminal=false\nCategories=Network;\n" +
+		"Keywords=iphone;hotspot;tether;cellular;\n"
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if old, _ := os.ReadFile(p); string(old) != body {
+		os.WriteFile(p, []byte(body), 0o644)
+	}
+}
+
 func runTray() {
 	if dir, err := os.UserCacheDir(); err == nil {
 		os.MkdirAll(dir, 0o755)
@@ -303,8 +322,15 @@ func runTray() {
 			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		}
 	}
+	// One tray per session: launching from the menu again is a no-op.
+	lock, err := os.OpenFile(filepath.Join(os.TempDir(), fmt.Sprintf("cellbridge-%d.lock", os.Getuid())), os.O_CREATE|os.O_RDWR, 0o600)
+	if err == nil && syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		exec.Command("notify-send", "-i", "network-wireless", "CellBridge", "Already running – use the tray icon.").Run()
+		return
+	}
 	c := &controller{cfg: loadConfig()}
 	installAutostart()
+	installMenuEntry()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -331,7 +357,8 @@ func (c *controller) ready() {
 	mLog := systray.AddMenuItem("Open log", "")
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	if c.cfg.AutoConnect {
+	// The menu entry passes --connect; login autostart doesn't.
+	if c.cfg.AutoConnect || slices.Contains(os.Args[1:], "--connect") {
 		c.start()
 	}
 	go func() {

@@ -24,6 +24,7 @@ type Config struct {
 	Hotspot     bool   `json:"hotspot"`      // create our own AP (vs. reuse current Wi-Fi)
 	AutoConnect bool   `json:"auto_connect"` // connect when the tray starts
 	LastPhone   string `json:"last_phone"` // "ip:port"
+	Band        string `json:"band"`       // AP band that last worked: "a" or "bg"
 }
 
 func configPath() string {
@@ -46,10 +47,10 @@ func loadConfig() *Config {
 		json.Unmarshal(b, c)
 	}
 	if c.SSID == "" {
-		c.SSID = "CellBridge-" + randString("ABCDEFGHJKMNPQRSTUVWXYZ23456789", 4)
+		c.SSID = "ozok internet"
 	}
 	if c.Password == "" {
-		c.Password = randString("abcdefghjkmnpqrstuvwxyz23456789", 12)
+		c.Password = randString("0123456789", 8) // easy to type on a phone
 	}
 	c.save()
 	return c
@@ -116,6 +117,7 @@ func hotspotUp(iface string, c *Config) error {
 		"wifi-sec.pairwise", "ccmp",
 		"wifi-sec.group", "ccmp",
 		"wifi-sec.psk", c.Password,
+		"wifi-sec.pmf", "disable", // plain WPA2-PSK; NM's WPA3/SAE AP mode is flaky with iPhones
 	}
 	if _, err := nmcli(base...); err != nil {
 		return err
@@ -124,12 +126,21 @@ func hotspotUp(iface string, c *Config) error {
 	privileged("dnsmasq", "on").Run()
 	defer privileged("dnsmasq", "off").Run()
 
+	// Try the band that worked last time first; many cards refuse a 5 GHz AP.
+	bands := []string{"a", "bg"}
+	if c.Band == "bg" {
+		bands = []string{"bg", "a"}
+	}
 	var lastErr error
-	for _, band := range []string{"a", "bg"} {
+	for _, band := range bands {
 		if _, err := nmcli("connection", "modify", conName, "802-11-wireless.band", band); err != nil {
 			return err
 		}
 		if _, err := nmcli("--wait", "25", "connection", "up", conName); err == nil {
+			if c.Band != band {
+				c.Band = band
+				c.save()
+			}
 			return nil
 		} else {
 			lastErr = err
