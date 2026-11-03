@@ -161,7 +161,7 @@ func (c *controller) loop(ctx context.Context) {
 			}
 		}
 		c.setStatus(stBusy, "Waiting for iPhone (join “"+c.ssidHint()+"”, open CellBridge)")
-		phone := findPhone(ctx, iface, c.cfg.LastPhone, c.cfg.Port)
+		phone := findPhone(ctx, iface, c.cfg.LastPhone)
 		if phone == "" {
 			sleepCtx(ctx, 2*time.Second)
 			continue
@@ -193,8 +193,8 @@ func firstLine(s string) string {
 
 // tunnel runs the root helper until ctx ends, the helper dies or the phone
 // stops answering.
-func (c *controller) tunnel(ctx context.Context, iface, phone string) error {
-	addr := net.JoinHostPort(phone, fmt.Sprint(c.cfg.Port))
+func (c *controller) tunnel(ctx context.Context, iface, addr string) error {
+	phone, _, _ := net.SplitHostPort(addr)
 	cmd := privileged("helper", "--proxy", addr, "--iface", iface)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()

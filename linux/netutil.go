@@ -23,8 +23,7 @@ type Config struct {
 	Password    string `json:"password"`
 	Hotspot     bool   `json:"hotspot"`      // create our own AP (vs. reuse current Wi-Fi)
 	AutoConnect bool   `json:"auto_connect"` // connect when the tray starts
-	Port        int    `json:"port"`
-	LastPhone   string `json:"last_phone"`
+	LastPhone   string `json:"last_phone"` // "ip:port"
 }
 
 func configPath() string {
@@ -42,7 +41,7 @@ func randString(alphabet string, n int) string {
 }
 
 func loadConfig() *Config {
-	c := &Config{Hotspot: true, Port: 1080}
+	c := &Config{Hotspot: true}
 	if b, err := os.ReadFile(configPath()); err == nil {
 		json.Unmarshal(b, c)
 	}
@@ -51,9 +50,6 @@ func loadConfig() *Config {
 	}
 	if c.Password == "" {
 		c.Password = randString("abcdefghjkmnpqrstuvwxyz23456789", 12)
-	}
-	if c.Port == 0 {
-		c.Port = 1080
 	}
 	c.save()
 	return c
@@ -189,42 +185,83 @@ func isSocks(addr string, timeout time.Duration) bool {
 	return b[0] == 5 && b[1] == 0
 }
 
-// candidates lists hosts to probe: the last phone, ARP neighbours on iface,
-// then every host in our /24.
-func candidates(iface, last string) []string {
+// phonePorts mirrors the iOS app's listener fallback list.
+var phonePorts = func() []int {
+	p := make([]int, 0, 10)
+	for i := 1080; i <= 1089; i++ {
+		p = append(p, i)
+	}
+	return p
+}()
+
+// browseMDNS asks avahi for CellBridge Bonjour adverts on iface ("ip:port").
+func browseMDNS(ctx context.Context, iface string) []string {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "avahi-browse", "-rpt", "_cellbridge._tcp").Output()
+	var addrs []string
+	for _, l := range strings.Split(string(out), "\n") {
+		// =;iface;IPv4;name;type;domain;host;address;port;txt
+		f := strings.Split(l, ";")
+		if len(f) >= 9 && f[0] == "=" && f[1] == iface && f[2] == "IPv4" {
+			addrs = append(addrs, net.JoinHostPort(f[7], f[8]))
+		}
+	}
+	return addrs
+}
+
+// candidates lists addresses to probe: Bonjour adverts, the last phone,
+// ARP neighbours on every fallback port, then port 1080 across our /24.
+func candidates(ctx context.Context, iface, last string) []string {
 	self, n, err := ifaceNet(iface)
 	if err != nil {
 		return nil
 	}
-	seen := map[string]bool{self.String(): true}
+	seen := map[string]bool{}
 	var out []string
-	add := func(ip string) {
-		if !seen[ip] {
-			seen[ip] = true
-			out = append(out, ip)
+	add := func(addr string) {
+		if !seen[addr] {
+			seen[addr] = true
+			out = append(out, addr)
 		}
 	}
-	if ip := net.ParseIP(last); ip != nil && n.Contains(ip) {
+	inNet := func(addr string) bool {
+		h, _, err := net.SplitHostPort(addr)
+		ip := net.ParseIP(h)
+		return err == nil && ip != nil && n.Contains(ip) && !ip.Equal(self)
+	}
+	for _, a := range browseMDNS(ctx, iface) {
+		if inNet(a) {
+			add(a)
+		}
+	}
+	if inNet(last) {
 		add(last)
 	}
 	if b, err := os.ReadFile("/proc/net/arp"); err == nil {
 		for _, l := range strings.Split(string(b), "\n")[1:] {
 			f := strings.Fields(l)
 			if len(f) >= 6 && f[5] == iface && f[2] != "0x0" {
-				add(f[0])
+				for _, p := range phonePorts {
+					if a := net.JoinHostPort(f[0], fmt.Sprint(p)); inNet(a) {
+						add(a)
+					}
+				}
 			}
 		}
 	}
 	base := self.Mask(net.CIDRMask(24, 32))
 	for i := 1; i < 255; i++ {
-		add(net.IPv4(base[0], base[1], base[2], byte(i)).String())
+		if a := net.JoinHostPort(net.IPv4(base[0], base[1], base[2], byte(i)).String(), "1080"); inNet(a) {
+			add(a)
+		}
 	}
 	return out
 }
 
-// findPhone probes candidates in parallel and returns the first SOCKS5 host.
-func findPhone(ctx context.Context, iface, last string, port int) string {
-	cands := candidates(iface, last)
+// findPhone probes candidates in parallel and returns the first SOCKS5 "ip:port".
+func findPhone(ctx context.Context, iface, last string) string {
+	cands := candidates(ctx, iface, last)
 	if len(cands) == 0 {
 		return ""
 	}
@@ -233,9 +270,9 @@ func findPhone(ctx context.Context, iface, last string, port int) string {
 	found := make(chan string, 1)
 	sem := make(chan struct{}, 64)
 	var wg sync.WaitGroup
-	for _, ip := range cands {
+	for _, addr := range cands {
 		wg.Add(1)
-		go func(ip string) {
+		go func(addr string) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -243,20 +280,20 @@ func findPhone(ctx context.Context, iface, last string, port int) string {
 				return
 			}
 			defer func() { <-sem }()
-			if ctx.Err() == nil && isSocks(net.JoinHostPort(ip, fmt.Sprint(port)), 600*time.Millisecond) {
+			if ctx.Err() == nil && isSocks(addr, 600*time.Millisecond) {
 				select {
-				case found <- ip:
+				case found <- addr:
 					cancel()
 				default:
 				}
 			}
-		}(ip)
+		}(addr)
 	}
 	go func() { wg.Wait(); cancel() }()
 	<-ctx.Done()
 	select {
-	case ip := <-found:
-		return ip
+	case a := <-found:
+		return a
 	default:
 		return ""
 	}
