@@ -6,6 +6,7 @@ final class AppModel: ObservableObject {
     @Published var status = "Stopped"
     @Published var wifiIP = "—"
     @Published var active = 0
+    @Published var port: UInt16 = 0
     @Published var upRate = 0.0
     @Published var downRate = 0.0
     @Published var upTotal: UInt64 = 0
@@ -17,7 +18,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(forceCellular, forKey: "forceCellular"); server.forceCellular = forceCellular }
     }
 
-    let server = SocksServer(port: 1080)
+    let server = SocksServer()
     private let keeper = BackgroundKeeper()
     private var timer: Timer?
     private var last: (up: UInt64, down: UInt64, t: Date) = (0, 0, Date())
@@ -63,6 +64,7 @@ final class AppModel: ObservableObject {
         upTotal = s.up
         downTotal = s.down
         active = s.active
+        port = server.port
         wifiIP = Self.wifiAddress() ?? "not on Wi-Fi"
     }
 
@@ -110,7 +112,7 @@ struct ContentView: View {
                 Section("Status") {
                     row("State", m.status)
                     row("Wi-Fi IP", m.wifiIP)
-                    row("Proxy", "SOCKS5 :\(m.server.port)")
+                    row("Proxy", m.port == 0 ? "not listening" : "SOCKS5 :\(m.port)")
                     row("Connections", "\(m.active)")
                 }
                 Section("Throughput") {

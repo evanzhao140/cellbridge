@@ -23,15 +23,17 @@ final class Stats {
 final class SocksServer {
     let queue = DispatchQueue(label: "cellbridge.socks", qos: .userInitiated)
     let stats = Stats()
-    let port: UInt16
+    /// Port actually bound (0 until the listener is ready).
+    private(set) var port: UInt16 = 0
+    /// Preferred ports, then any free port; the laptop finds us via Bonjour or by probing these.
+    static let ports: [UInt16] = Array(1080...1089) + [0]
+    private var portIndex = 0
     var forceCellular = true
     var hotspotOnly = true
     var onState: ((String, Bool) -> Void)?
 
     private var listener: NWListener?
     private var sessions: [ObjectIdentifier: SocksSession] = [:]
-
-    init(port: UInt16 = 1080) { self.port = port }
 
     func start() {
         queue.async { self._start() }
@@ -41,6 +43,7 @@ final class SocksServer {
         queue.async {
             self.listener?.cancel()
             self.listener = nil
+            self.port = 0
             for s in self.sessions.values { s.close() }
             self.sessions.removeAll()
         }
@@ -51,20 +54,23 @@ final class SocksServer {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let params = NWParameters(tls: nil, tcp: tcp)
-        params.requiredInterfaceType = .wifi
+        // No interface restriction: a Wi-Fi-bound listener gets torn down (EADDRINUSE)
+        // when the phone switches networks. Peers are filtered in accept() instead.
         params.allowLocalEndpointReuse = true
+        let want = Self.ports[portIndex]
         do {
-            let l = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            let l = try NWListener(using: params, on: want == 0 ? .any : NWEndpoint.Port(rawValue: want)!)
             l.service = NWListener.Service(name: "CellBridge", type: "_cellbridge._tcp")
             l.stateUpdateHandler = { [weak self] st in
                 guard let self else { return }
                 switch st {
-                case .ready: self.onState?("Listening on port \(self.port)", true)
+                case .ready:
+                    self.port = l.port?.rawValue ?? want
+                    self.onState?("Listening on port \(self.port)", true)
                 case .waiting(let e): self.onState?("Waiting for Wi-Fi: \(e.localizedDescription)", true)
                 case .failed(let e):
-                    self.onState?("Listener failed: \(e.localizedDescription) – retrying", false)
-                    self.listener?.cancel(); self.listener = nil
-                    self.queue.asyncAfter(deadline: .now() + 2) { self._start() }
+                    self.onState?("Listener failed on \(want): \(e.localizedDescription) – retrying", false)
+                    self.retry(after: e)
                 case .cancelled: self.onState?("Stopped", false)
                 default: break
                 }
@@ -73,12 +79,22 @@ final class SocksServer {
             listener = l
             l.start(queue: queue)
         } catch {
-            onState?("Cannot listen: \(error.localizedDescription)", false)
+            onState?("Cannot listen on \(want): \(error.localizedDescription) – retrying", false)
+            retry(after: error as? NWError)
         }
     }
 
+    private func retry(after e: NWError?) {
+        if case .posix(.EADDRINUSE)? = e, portIndex < Self.ports.count - 1 { portIndex += 1 }
+        listener?.stateUpdateHandler = nil
+        listener?.cancel()
+        listener = nil
+        port = 0
+        queue.asyncAfter(deadline: .now() + 1) { self._start() }
+    }
+
     private func accept(_ c: NWConnection) {
-        if hotspotOnly, !Self.isHotspotPeer(c.endpoint) {
+        if hotspotOnly ? !Self.isHotspotPeer(c.endpoint) : !Self.isLANPeer(c.endpoint) {
             c.cancel(); return
         }
         let s = SocksSession(client: c, server: self)
@@ -112,9 +128,21 @@ final class SocksServer {
 
     /// NetworkManager's shared-mode hotspot hands out 10.42.x.x.
     static func isHotspotPeer(_ ep: NWEndpoint) -> Bool {
-        guard case let .hostPort(host, _) = ep, case let .ipv4(a) = host else { return false }
+        guard let b = ipv4Bytes(ep) else { return false }
+        return b[0] == 10 && b[1] == 42
+    }
+
+    /// Private LAN ranges (RFC 1918 + link-local); never carrier space like 100.64/10.
+    static func isLANPeer(_ ep: NWEndpoint) -> Bool {
+        guard let b = ipv4Bytes(ep) else { return false }
+        return b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) ||
+            (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254)
+    }
+
+    private static func ipv4Bytes(_ ep: NWEndpoint) -> [UInt8]? {
+        guard case let .hostPort(host, _) = ep, case let .ipv4(a) = host else { return nil }
         let b = [UInt8](a.rawValue)
-        return b.count == 4 && b[0] == 10 && b[1] == 42
+        return b.count == 4 ? b : nil
     }
 }
 
@@ -295,7 +323,6 @@ final class UDPAssociation {
 
     func start(_ ready: @escaping (UInt16?) -> Void) {
         let params = NWParameters.udp
-        params.requiredInterfaceType = .wifi
         guard let l = try? NWListener(using: params, on: .any) else { return ready(nil) }
         listener = l
         var reported = false
