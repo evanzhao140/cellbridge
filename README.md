@@ -14,10 +14,10 @@ apps on laptop ─► cb0 (tun2socks) ─► laptop Wi-Fi AP "CellBridge-XXXX" �
   through it and points systemd-resolved at 1.1.1.1/8.8.8.8 via the tunnel.
 * Throughput is limited by Wi-Fi and cellular, not by the relay (the tunnel measured ~200 Mbit/s in tests).
 
-## Linux (`linux/`)
+## Linux (`desktop/`)
 
 ```bash
-cd linux && go build -o cellbridge . && install -m755 cellbridge ~/.local/bin/
+cd desktop && go build -o cellbridge . && install -m755 cellbridge ~/.local/bin/
 ```
 
 Run `cellbridge`. It adds itself to autostart. Tray menu: **Connect** / Disconnect, live speed,
@@ -27,6 +27,18 @@ and the log is in `~/.cache/cellbridge.log`.
 
 Note: while the hotspot is up, the laptop's Wi-Fi card is busy as the AP, so it leaves your normal Wi-Fi.
 Disconnect restores it.
+
+## macOS (`desktop/`, same code)
+
+`.github/workflows/macos.yml` builds a universal (Apple Silicon + Intel) menu-bar `CellBridge.app` and publishes
+`CellBridge-macOS.zip` to the `mac-latest` release. Unzip it, move it to /Applications, then run
+`xattr -dr com.apple.quarantine /Applications/CellBridge.app` (the app is unsigned).
+
+A Mac can't create a WPA2 hotspot from software, so it **joins a network the iPhone is already on**, typically the
+Linux laptop's "ozok internet" hotspot. The Linux laptop and the Mac can then share the phone at the same time.
+Opening the app connects. The first time, it asks once for an admin password to install
+`/etc/sudoers.d/cellbridge`, which allows only `CellBridge helper …`. A LaunchAgent starts it (disconnected) at login.
+While connected, the Mac's Wi-Fi DNS is set to 1.1.1.1/8.8.8.8, and it is restored on disconnect.
 
 ## iOS (`ios/`)
 
