@@ -4,13 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"io"
 	"log"
-	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -32,47 +29,6 @@ const (
 	stErr
 )
 
-// icon draws a phone-with-signal glyph tinted for the given state.
-func icon(s state) []byte {
-	const n = 64
-	col := map[state]color.RGBA{
-		stOff:  {150, 150, 150, 255},
-		stBusy: {240, 170, 30, 255},
-		stOn:   {40, 200, 90, 255},
-		stErr:  {220, 60, 60, 255},
-	}[s]
-	img := image.NewRGBA(image.Rect(0, 0, n, n))
-	set := func(x, y int) { img.Set(x, y, col) }
-	// Phone body (outline) at the left.
-	for y := 14; y < 58; y++ {
-		for x := 6; x < 30; x++ {
-			edge := x < 10 || x >= 26 || y < 18 || y >= 50
-			if edge || (y >= 52 && x >= 15 && x < 21) {
-				set(x, y)
-			}
-		}
-	}
-	// Signal arcs radiating to the upper right.
-	cx, cy := 30.0, 34.0
-	for y := 0; y < n; y++ {
-		for x := 0; x < n; x++ {
-			dx, dy := float64(x)-cx, cy-float64(y)
-			if dx <= 0 || dy < -dx*0.9 || dy > dx*1.6 {
-				continue
-			}
-			r := math.Hypot(dx, dy)
-			for _, R := range []float64{12, 22, 32} {
-				if math.Abs(r-R) < 2.6 {
-					set(x, y)
-				}
-			}
-		}
-	}
-	var buf bytes.Buffer
-	png.Encode(&buf, img)
-	return buf.Bytes()
-}
-
 type controller struct {
 	cfg *Config
 
@@ -86,7 +42,21 @@ type controller struct {
 	lastMsg   string
 }
 
-var icons = map[state][]byte{stOff: icon(stOff), stBusy: icon(stBusy), stOn: icon(stOn), stErr: icon(stErr)}
+// Tray icons: the devil outline tinted per state (rendered by tools/make_icons.py).
+var (
+	//go:embed assets/tray-off.png
+	trayOff []byte
+	//go:embed assets/tray-busy.png
+	trayBusy []byte
+	//go:embed assets/tray-on.png
+	trayOn []byte
+	//go:embed assets/tray-err.png
+	trayErr []byte
+	//go:embed assets/icon-256.png
+	appIcon []byte
+
+	icons = map[state][]byte{stOff: trayOff, stBusy: trayBusy, stOn: trayOn, stErr: trayErr}
+)
 
 // setStatus updates the tray only when something changed, so the waiting loop
 // doesn't redraw the icon or append to the log every few seconds.

@@ -29,8 +29,9 @@ jobs:
         run: |
           set -e
           APP=CellBridge.app
-          mkdir -p $APP/Contents/MacOS
+          mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
           cp macos/Info.plist $APP/Contents/
+          cp macos/AppIcon.icns $APP/Contents/Resources/
           cp cellbridge $APP/Contents/MacOS/
           codesign --force --deep -s - $APP
           ditto -c -k --keepParent $APP CellBridge-macOS.zip
