@@ -22,7 +22,9 @@ targets:
       properties:
         CFBundleDisplayName: CellBridge
         UILaunchScreen: {}
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, location]
+        NSLocationWhenInUseUsageDescription: CellBridge doesn't use your location. Low-accuracy location updates keep it running in the background so your laptop stays online.
+        NSLocationAlwaysAndWhenInUseUsageDescription: CellBridge doesn't use your location. Low-accuracy location updates keep it running in the background so your laptop stays online.
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSLocalNetworkUsageDescription: CellBridge accepts connections from your laptop over Wi-Fi and relays them over cellular.

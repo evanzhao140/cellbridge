@@ -1,6 +1,18 @@
 import SwiftUI
 import UIKit
 
+enum KeepAlive: String, CaseIterable, Identifiable {
+    case location, audio, both
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .location: return "Location"
+        case .audio: return "Silent audio"
+        case .both: return "Both"
+        }
+    }
+}
+
 final class AppModel: ObservableObject {
     @Published var running = false
     @Published var status = "Stopped"
@@ -17,22 +29,30 @@ final class AppModel: ObservableObject {
     @Published var forceCellular: Bool {
         didSet { UserDefaults.standard.set(forceCellular, forKey: "forceCellular"); server.forceCellular = forceCellular }
     }
+    @Published var keepAlive: KeepAlive {
+        didSet { UserDefaults.standard.set(keepAlive.rawValue, forKey: "keepAlive"); applyKeepers() }
+    }
+    /// What is actually keeping the app alive right now (shown in the UI).
+    @Published var keepAliveNote = ""
 
     let server = SocksServer()
-    private let keeper = BackgroundKeeper()
+    private let audio = BackgroundKeeper()
+    private let location = LocationKeeper()
     private var timer: Timer?
     private var last: (up: UInt64, down: UInt64, t: Date) = (0, 0, Date())
 
     init() {
         let d = UserDefaults.standard
-        d.register(defaults: ["hotspotOnly": true, "forceCellular": true, "autoStart": true])
+        d.register(defaults: ["hotspotOnly": true, "forceCellular": true, "autoStart": true, "keepAlive": KeepAlive.location.rawValue])
         hotspotOnly = d.bool(forKey: "hotspotOnly")
         forceCellular = d.bool(forKey: "forceCellular")
+        keepAlive = KeepAlive(rawValue: d.string(forKey: "keepAlive") ?? "") ?? .location
         server.hotspotOnly = hotspotOnly
         server.forceCellular = forceCellular
         server.onState = { [weak self] msg, _ in
             DispatchQueue.main.async { self?.status = msg }
         }
+        location.onAuthorizationChange = { [weak self] in self?.applyKeepers() }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
         Signing.scheduleReminders()
         if d.bool(forKey: "autoStart") { start() }
@@ -41,18 +61,46 @@ final class AppModel: ObservableObject {
     func start() {
         running = true
         UserDefaults.standard.set(true, forKey: "autoStart")
-        keeper.start()
+        applyKeepers()
         server.start()
-        UIApplication.shared.isIdleTimerDisabled = true
     }
 
     func stop() {
         running = false
         UserDefaults.standard.set(false, forKey: "autoStart")
         server.stop()
-        keeper.stop()
-        UIApplication.shared.isIdleTimerDisabled = false
+        applyKeepers()
         status = "Stopped"
+    }
+
+    /// Starts/stops the background keep-alives for the chosen mode. If location
+    /// is denied, silent audio takes over so sharing still survives the lock screen.
+    private func applyKeepers() {
+        guard running else {
+            location.stop()
+            if audio.running { audio.stop() }
+            keepAliveNote = ""
+            return
+        }
+        let wantLocation = keepAlive != .audio
+        var wantAudio = keepAlive != .location
+        if wantLocation {
+            if !location.running { location.start() }
+        } else if location.running {
+            location.stop()
+        }
+        if wantLocation && location.denied { wantAudio = true }
+        if wantAudio {
+            if !audio.running { audio.start() }
+        } else if audio.running {
+            audio.stop()
+        }
+        switch (wantLocation && location.authorized, wantAudio) {
+        case (true, true): keepAliveNote = "Location + silent audio"
+        case (true, false): keepAliveNote = "Low-power location (blue arrow in status bar)"
+        case (false, true): keepAliveNote = wantLocation ? "Location not allowed – using silent audio" : "Silent audio"
+        case (false, false): keepAliveNote = "Waiting for location permission…"
+        }
     }
 
     private func tick() {
@@ -131,7 +179,15 @@ struct ContentView: View {
                     row("↑ from laptop", String(format: "%.1f Mbit/s", m.upRate))
                     row("Total", "\(fmt(m.downTotal)) ↓  \(fmt(m.upTotal)) ↑")
                 }
-                Section(footer: Text("Join the laptop's “ozok internet” Wi-Fi (Settings → Wi-Fi). It has no internet — that's expected; the phone keeps using cellular. Leave this app open or in the background.")) {
+                Section(header: Text("Keep running in background"),
+                        footer: Text("Works with the screen locked. Location uses cell towers, not GPS, and is never stored or sent anywhere. Swiping the app away stops sharing.")) {
+                    Picker("Keep alive", selection: $m.keepAlive) {
+                        ForEach(KeepAlive.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    if !m.keepAliveNote.isEmpty { row("Active", m.keepAliveNote) }
+                }
+                Section(footer: Text("Join the laptop's “ozok internet” Wi-Fi (Settings → Wi-Fi). It has no internet — that's expected; the phone keeps using cellular. You can lock the phone; just don't swipe CellBridge away.")) {
                     Toggle("Only accept laptop hotspot (10.42.x.x)", isOn: $m.hotspotOnly)
                     Toggle("Force cellular for outbound", isOn: $m.forceCellular)
                 }
