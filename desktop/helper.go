@@ -41,7 +41,7 @@ func runHelper(args []string) {
 		Device:                   "tun://" + tunName,
 		Interface:                *iface,
 		MTU:                      1500,
-		LogLevel:                 "warn",
+		LogLevel:                 "error",
 		UDPTimeout:               30 * time.Second,
 		TCPModerateReceiveBuffer: true,
 	})

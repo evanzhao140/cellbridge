@@ -81,10 +81,24 @@ type controller struct {
 	done   chan struct{}
 
 	mStatus, mSpeed, mToggle, mWifi, mHotspot, mAuto *systray.MenuItem
+
+	lastState state
+	lastMsg   string
 }
 
+var icons = map[state][]byte{stOff: icon(stOff), stBusy: icon(stBusy), stOn: icon(stOn), stErr: icon(stErr)}
+
+// setStatus updates the tray only when something changed, so the waiting loop
+// doesn't redraw the icon or append to the log every few seconds.
 func (c *controller) setStatus(s state, msg string) {
-	systray.SetIcon(icon(s))
+	c.mu.Lock()
+	same := s == c.lastState && msg == c.lastMsg
+	c.lastState, c.lastMsg = s, msg
+	c.mu.Unlock()
+	if same {
+		return
+	}
+	systray.SetIcon(icons[s])
 	systray.SetTooltip("CellBridge – " + msg)
 	c.mStatus.SetTitle(msg)
 	log.Print(msg)
@@ -245,11 +259,12 @@ func (c *controller) tunnel(ctx context.Context, iface, addr string) error {
 
 	c.setStatus(stOn, "Connected via iPhone "+phone)
 	c.mWifi.SetTitle(c.wifiTitle())
-	tick := time.NewTicker(time.Second)
+	// Every 3 s: refresh the speed line and check the phone is still there.
+	tick := time.NewTicker(3 * time.Second)
 	defer tick.Stop()
 	lastDown, lastUp := tunBytes()
 	t0 := time.Now()
-	misses, n := 0, 0
+	misses := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -265,14 +280,12 @@ func (c *controller) tunnel(ctx context.Context, iface, addr string) error {
 			up := float64(u-lastUp) * 8 / dt / 1e6
 			lastDown, lastUp, t0 = d, u, now
 			c.mSpeed.SetTitle(fmt.Sprintf("↓ %.1f Mbit/s   ↑ %.1f Mbit/s", down, up))
-			if n++; n%3 == 0 {
-				if isSocks(addr, 2*time.Second) {
-					misses = 0
-				} else if misses++; misses >= 3 {
-					shutdown()
-					c.setStatus(stBusy, "Lost iPhone, searching again…")
-					return nil
-				}
+			if isSocks(addr, 2*time.Second) {
+				misses = 0
+			} else if misses++; misses >= 3 {
+				shutdown()
+				c.setStatus(stBusy, "Lost iPhone, searching again…")
+				return nil
 			}
 		}
 	}
@@ -310,7 +323,7 @@ func runTray() {
 }
 
 func (c *controller) ready() {
-	systray.SetIcon(icon(stOff))
+	systray.SetIcon(icons[stOff])
 	systray.SetTitle("")
 	systray.SetTooltip("CellBridge")
 	c.mStatus = systray.AddMenuItem("Disconnected", "")

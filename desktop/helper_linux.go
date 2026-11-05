@@ -13,9 +13,9 @@ import (
 const dnsmasqConf = "/etc/NetworkManager/dnsmasq-shared.d/cellbridge.conf"
 
 // runDnsmasq toggles a NetworkManager shared-mode dnsmasq snippet that stops
-// the hotspot from advertising this laptop as router/DNS. Without it the
-// iPhone would send its own traffic to the laptop, which sends it back to the
-// phone. dnsmasq reads it only at startup, so it is switched on just for the
+// the hotspot from advertising this laptop as router/DNS to the iPhone.
+// Without it the iPhone would send its own traffic to the laptop, which sends
+// it back to the phone. dnsmasq reads it only at startup, so it is switched on just for the
 // moment the hotspot comes up.
 func runDnsmasq(args []string) {
 	if len(args) != 1 {
@@ -24,8 +24,11 @@ func runDnsmasq(args []string) {
 	switch args[0] {
 	case "on":
 		body := "# Written by CellBridge while its hotspot starts; removed right after.\n" +
-			"# Don't hand out a default gateway or DNS server to hotspot clients.\n" +
-			"dhcp-option=3\ndhcp-option=6\n"
+			"# The iPhone gets no gateway/DNS so it keeps its own traffic on cellular.\n" +
+			"# Everyone else (e.g. a Mac) gets this laptop as gateway and is NATed\n" +
+			"# into the phone tunnel.\n" +
+			"dhcp-name-match=set:phone,iPhone*\ndhcp-name-match=set:phone,iPad*\n" +
+			"dhcp-option=tag:phone,3\ndhcp-option=tag:phone,6\n"
 		if err := os.WriteFile(dnsmasqConf, []byte(body), 0o644); err != nil {
 			log.Fatal(err)
 		}

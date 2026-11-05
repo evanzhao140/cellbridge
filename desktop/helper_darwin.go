@@ -58,12 +58,43 @@ func setupNet(iface string, dns []string) error {
 	if err := run(append([]string{"networksetup", "-setdnsservers", svc}, dns...)...); err != nil {
 		return err
 	}
+	// Publish the tunnel as a network service in configd's dynamic store. On a
+	// network whose DHCP gives no router (the Linux hotspot does that for the
+	// iPhone), macOS otherwise has no primary service: apps think they are
+	// offline and the DNS servers above are ignored.
+	if err := scutil(fmt.Sprintf(`d.init
+d.add Addresses * 198.18.0.1
+d.add DestAddresses * 198.18.0.1
+d.add SubnetMasks * 255.254.0.0
+d.add InterfaceName %s
+d.add Router 198.18.0.1
+set %s/IPv4
+d.init
+d.add ServerAddresses * %s
+d.add SupplementalMatchDomains * ""
+set %s/DNS
+`, tunName, scKey, strings.Join(dns, " "), scKey)); err != nil {
+		return err
+	}
 	exec.Command("dscacheutil", "-flushcache").Run()
 	exec.Command("killall", "-HUP", "mDNSResponder").Run()
 	return nil
 }
 
+// scKey is our service in the dynamic store; it vanishes on reboot.
+const scKey = "State:/Network/Service/com.ozok.cellbridge"
+
+func scutil(script string) error {
+	cmd := exec.Command("scutil")
+	cmd.Stdin = strings.NewReader(script + "quit\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("scutil: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func cleanupNet(string) {
+	scutil("remove " + scKey + "/IPv4\nremove " + scKey + "/DNS\n")
 	for _, n := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		exec.Command("route", "-q", "-n", "delete", "-net", n, "-interface", tunName).Run()
 	}
