@@ -148,6 +148,7 @@ func (c *controller) loop(ctx context.Context) {
 	if c.cfg.Hotspot {
 		defer hotspotDown()
 	}
+	var lastSweep time.Time
 	for ctx.Err() == nil {
 		if c.cfg.Hotspot && !hotspotActive() {
 			c.setStatus(stBusy, "Starting Wi-Fi hotspot "+c.cfg.SSID+"…")
@@ -160,9 +161,13 @@ func (c *controller) loop(ctx context.Context) {
 			}
 		}
 		c.setStatus(stBusy, "Waiting for iPhone (join “"+c.ssidHint()+"”, open CellBridge)")
-		phone := findPhone(ctx, iface, c.cfg.LastPhone)
+		sweep := time.Since(lastSweep) > 30*time.Second
+		if sweep {
+			lastSweep = time.Now()
+		}
+		phone := findPhone(ctx, iface, c.cfg.LastPhone, sweep)
 		if phone == "" {
-			sleepCtx(ctx, 2*time.Second)
+			sleepCtx(ctx, 3*time.Second)
 			continue
 		}
 		c.cfg.LastPhone = phone

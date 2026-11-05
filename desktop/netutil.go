@@ -103,8 +103,8 @@ var phonePorts = func() []int {
 }()
 
 // candidates lists addresses to probe: Bonjour adverts, the last phone,
-// ARP neighbours on every fallback port, then every fallback port across our /24.
-func candidates(ctx context.Context, iface, last string) []string {
+// ARP neighbours on every fallback port, and (if sweep) port 1080 across our /24.
+func candidates(ctx context.Context, iface, last string, sweep bool) []string {
 	self, n, err := ifaceNet(iface)
 	if err != nil {
 		return nil
@@ -137,10 +137,13 @@ func candidates(ctx context.Context, iface, last string) []string {
 			}
 		}
 	}
-	base := self.Mask(net.CIDRMask(24, 32))
-	for _, p := range phonePorts {
+	// The /24 sweep is the expensive part (one connect per host), so it only
+	// tries the default port; hosts that answer land in the ARP table and get
+	// all fallback ports on the next cheap round.
+	if sweep {
+		base := self.Mask(net.CIDRMask(24, 32))
 		for i := 1; i < 255; i++ {
-			if a := net.JoinHostPort(net.IPv4(base[0], base[1], base[2], byte(i)).String(), fmt.Sprint(p)); inNet(a) {
+			if a := net.JoinHostPort(net.IPv4(base[0], base[1], base[2], byte(i)).String(), "1080"); inNet(a) {
 				add(a)
 			}
 		}
@@ -149,15 +152,15 @@ func candidates(ctx context.Context, iface, last string) []string {
 }
 
 // findPhone probes candidates in parallel and returns the first SOCKS5 "ip:port".
-func findPhone(ctx context.Context, iface, last string) string {
-	cands := candidates(ctx, iface, last)
+func findPhone(ctx context.Context, iface, last string, sweep bool) string {
+	cands := candidates(ctx, iface, last, sweep)
 	if len(cands) == 0 {
 		return ""
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	found := make(chan string, 1)
-	sem := make(chan struct{}, 256)
+	sem := make(chan struct{}, 64)
 	var wg sync.WaitGroup
 	for _, addr := range cands {
 		wg.Add(1)

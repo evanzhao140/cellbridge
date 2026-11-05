@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async { self?.status = msg }
         }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        Signing.scheduleReminders()
         if d.bool(forKey: "autoStart") { start() }
     }
 
@@ -109,6 +110,16 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .listRowBackground(Color.clear)
                 }
+                if let expiry = Signing.expiry {
+                    Section(footer: Text("Sideloading another app with a new certificate can stop CellBridge from opening earlier – re-sideload it if that happens.")) {
+                        HStack {
+                            Text("Signing expires")
+                            Spacer()
+                            Text(expiry.formatted(date: .abbreviated, time: .shortened))
+                                .foregroundColor(expiry.timeIntervalSinceNow < 2 * 86_400 ? .orange : .secondary)
+                        }
+                    }
+                }
                 Section("Status") {
                     row("State", m.status)
                     row("Wi-Fi IP", m.wifiIP)
@@ -120,7 +131,7 @@ struct ContentView: View {
                     row("↑ from laptop", String(format: "%.1f Mbit/s", m.upRate))
                     row("Total", "\(fmt(m.downTotal)) ↓  \(fmt(m.upTotal)) ↑")
                 }
-                Section(footer: Text("Join the laptop's “CellBridge-…” Wi-Fi (Settings → Wi-Fi). It has no internet — that's expected; the phone keeps using cellular. Leave this app open or in the background.")) {
+                Section(footer: Text("Join the laptop's “ozok internet” Wi-Fi (Settings → Wi-Fi). It has no internet — that's expected; the phone keeps using cellular. Leave this app open or in the background.")) {
                     Toggle("Only accept laptop hotspot (10.42.x.x)", isOn: $m.hotspotOnly)
                     Toggle("Force cellular for outbound", isOn: $m.forceCellular)
                 }
